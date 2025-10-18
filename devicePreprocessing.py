@@ -1,7 +1,7 @@
 import pandas as pd
 import json
 
-csv_file = "datasets/raw_csvs/device.csv"
+csv_file = "/home/gururaj/datasets/raw_csvs/device.csv"
 df = pd.read_csv(csv_file)
 
 columns = ['user', 'pc', 'role']
@@ -17,6 +17,9 @@ for col in columns:
 for col in columns:
     df[col] = df[col].map(mappings[col])
 
-df.to_csv("device_encoded.csv", index=False)
+# activity_map = {'Connect': 1, 'Disconnect': 0}
+# df['activity'] = df['activity'].map(activity_map)
+
+# df.to_csv("device_encoded.csv", index=False)
 
 print("Device mappings saved to JSON files and device_encoded.csv created.")

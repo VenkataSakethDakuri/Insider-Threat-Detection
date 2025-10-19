@@ -64,4 +64,3 @@ y = pd.Series(target, name='anomaly_status')
 
 print(X.head())
 print(y.head())
-

@@ -1,6 +1,7 @@
 import re
 import json
 import pandas as pd
+from imblearn.over_sampling import SMOTENC
 
 with open('user_device.json') as f:
     user_map = json.load(f)

@@ -148,3 +148,9 @@ print(f"Precision: {( ( (y_test == 1) & (y_pred == 1) ).sum() ) / ( (y_pred == 1
 print(f"Recall: {( ( (y_test == 1) & (y_pred == 1) ).sum() ) / ( (y_test == 1).sum() + 1e-10 ):.4f}")
 print(f"AUC: {auc:.4f}")
 print(f"F1 Score: {f1:.4f}")
+
+# Accuracy: 0.9910
+# Precision: 0.4671
+# Recall: 0.4344
+# AUC: 0.9608
+# F1 Score: 0.4502

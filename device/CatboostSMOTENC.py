@@ -73,7 +73,8 @@ print(f"count is {count}")
 
 feature_names = [
     'user_encoded', 'pc_encoded', 'role_encoded', 'activity_encoded',
-    'hour', 'day_of_week', 'after_hours', 'is_weekday',
+    'hour', 
+    'day_of_week', 'after_hours', 'is_weekday',
     'sinusoidal_hour', 'cosine_hour'
 ]
 
@@ -88,13 +89,17 @@ print(y.head())
 
 categorical_features = [0, 1, 2, 3, 4, 5, 6, 7] 
 
-# 80/20 train/test split
-split_idx = int(len(X) * 0.8)
-X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
-y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
+# 70/10/20 train/val/test split
+train_idx = int(len(X) * 0.7)
+val_idx = int(len(X) * 0.8)  
+
+X_train, y_train = X.iloc[:train_idx], y.iloc[:train_idx]
+X_val, y_val = X.iloc[train_idx:val_idx], y.iloc[train_idx:val_idx]
+X_test, y_test = X.iloc[val_idx:], y.iloc[val_idx:]
 
 #make all 2,3 as 1 in y
 y_train = y_train.replace({2: 1, 3: 1})
+y_val = y_val.replace({2: 1, 3: 1})
 y_test = y_test.replace({2: 1, 3: 1})
 
 smote_balancer = SMOTENC(categorical_features=categorical_features, random_state=108)
@@ -138,7 +143,7 @@ model = CatBoostClassifier(**model_params)
 
 model.fit(
     X_train_resampled, y_train_resampled,
-    eval_set=(X_test, y_test),
+    eval_set=(X_val, y_val),
     use_best_model=True,
     early_stopping_rounds=100
 )
@@ -157,8 +162,31 @@ print(f"Recall: {( ( (y_test == 1) & (y_pred == 1) ).sum() ) / ( (y_test == 1).s
 print(f"AUC: {auc:.4f}")
 print(f"F1 Score: {f1:.4f}")
 
+#Results with sin and cos features as numerical and everything else as categorical
 # Accuracy: 0.9915
 # Precision: 0.4755
 # Recall: 0.0991
 # AUC: 0.9159
 # F1 Score: 0.1641
+
+# Test Set Results:
+# Accuracy: 0.9915
+# Precision: 0.0000
+# Recall: 0.0000
+# AUC: 0.9093
+# F1 Score: 0.0000
+
+# Results with week of day as numerical and everything else as categorical. Sin and cos removed.
+# Accuracy: 0.9926
+# Precision: 0.6469
+# Recall: 0.2857
+# AUC: 0.8514
+# F1 Score: 0.3964
+
+
+# Test Set Results:
+# Accuracy: 0.9915
+# Precision: 0.0000
+# Recall: 0.0000
+# AUC: 0.8220
+# F1 Score: 0.0000

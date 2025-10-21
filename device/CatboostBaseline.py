@@ -83,13 +83,17 @@ print(y.head())
 
 categorical_features = [0, 1, 2, 3, 4, 5, 6, 7] 
 
-# 80/20 train/test split
-split_idx = int(len(X) * 0.8)
-X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
-y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
+# 70/10/20 train/val/test split
+train_idx = int(len(X) * 0.7)
+val_idx = int(len(X) * 0.8)  
+
+X_train, y_train = X.iloc[:train_idx], y.iloc[:train_idx]
+X_val, y_val = X.iloc[train_idx:val_idx], y.iloc[train_idx:val_idx]
+X_test, y_test = X.iloc[val_idx:], y.iloc[val_idx:]
 
 #make all 2,3 as 1 in y
 y_train = y_train.replace({2: 1, 3: 1})
+y_val = y_val.replace({2: 1, 3: 1})
 y_test = y_test.replace({2: 1, 3: 1})
 
 print("Unique values in y_train:", y_train.unique())
@@ -130,12 +134,11 @@ model = CatBoostClassifier(**model_params)
 
 model.fit(
     X_train, y_train,
-    eval_set=(X_test, y_test),
+    eval_set=(X_val, y_val),
     use_best_model=True,
     early_stopping_rounds=100
 )
 
-# Evaluate on test set
 y_pred_proba = model.predict_proba(X_test)[:, 1]
 y_pred = (y_pred_proba >= 0.5).astype(int)
 
@@ -149,8 +152,10 @@ print(f"Recall: {( ( (y_test == 1) & (y_pred == 1) ).sum() ) / ( (y_test == 1).s
 print(f"AUC: {auc:.4f}")
 print(f"F1 Score: {f1:.4f}")
 
-# Accuracy: 0.9910
-# Precision: 0.4671
+#With all features as categorical
+# Test Set Results:
+# Accuracy: 0.9909
+# Precision: 0.4613
 # Recall: 0.4344
-# AUC: 0.9608
-# F1 Score: 0.4502
+# AUC: 0.9642
+# F1 Score: 0.4474

@@ -1,7 +1,7 @@
 import re
 import json
 import pandas as pd
-from imblearn.over_sampling import SMOTENC
+import numpy as np
 from catboost import CatBoostClassifier
 from sklearn.metrics import roc_auc_score, f1_score
 # from catboost import get_gpu_device_count
@@ -51,13 +51,18 @@ df['is_weekday'] = df['day_of_week'].apply(lambda x: 1 if x in [0, 1, 2, 3, 4] e
 feature_vectors_final = []
 target = []
 
+df['sinusoidal_hour'] = np.sin(2 * np.pi * df['hour'] / 24)
+df['cosine_hour'] = np.cos(2 * np.pi * df['hour'] / 24)
+
 for i, row in df.iterrows():
     vec = extract_feature_vector(row['Query'], row['Role'])
     vec += [
-        row['hour'],
+      #  row['hour'],
         row['day_of_week'],
         row['after_hours'],
         row['is_weekday'],
+        row['sinusoidal_hour'],
+        row['cosine_hour'],
     ]
     feature_vectors_final.append(vec)
     target.append(row['anomaly_status'])
@@ -68,7 +73,10 @@ print(count)
 
 feature_names = [
     'user_encoded', 'pc_encoded', 'role_encoded', 'activity_encoded',
-    'hour', 'day_of_week', 'after_hours', 'is_weekday'
+   # 'hour', 
+    'day_of_week', 
+    'after_hours', 'is_weekday', 
+    'sinusoidal_hour', 'cosine_hour'
 ]
 
 X = pd.DataFrame(feature_vectors_final, columns=feature_names)
@@ -81,7 +89,7 @@ print(X.head())
 print(y.head())
 
 
-categorical_features = [0, 1, 2, 3, 4, 5, 6, 7] 
+categorical_features = [0, 1, 2, 3, 4, 5, 6] 
 
 # 70/10/20 train/val/test split
 train_idx = int(len(X) * 0.7)
@@ -106,7 +114,7 @@ print(f"Test set size: {len(X_test)}")
 
 model_params = {
     'loss_function': 'Logloss',
-    'eval_metric': 'AUC',
+    'eval_metric': 'AUC',   
     'auto_class_weights': 'Balanced',
     'cat_features': categorical_features,
     'iterations': 500,
@@ -152,10 +160,37 @@ print(f"Recall: {( ( (y_test == 1) & (y_pred == 1) ).sum() ) / ( (y_test == 1).s
 print(f"AUC: {auc:.4f}")
 print(f"F1 Score: {f1:.4f}")
 
-#With all features as categorical
-# Test Set Results:
+#With all features as categorical. No sin and cos features
 # Accuracy: 0.9909
 # Precision: 0.4613
 # Recall: 0.4344
 # AUC: 0.9642
 # F1 Score: 0.4474
+
+#Results with sin, cos and day of week features as numerical and everything else as categorical
+# Accuracy: 0.9910
+# Precision: 0.4671
+# Recall: 0.4344
+# AUC: 0.9600
+# F1 Score: 0.4502
+
+#Results with everything same as 2nd result but hour is totally removed
+# Accuracy: 0.9910
+# Precision: 0.4671
+# Recall: 0.4344
+# AUC: 0.9662
+# F1 Score: 0.4502
+
+#Result with everything same as 3rd result but depth changed to 9
+# Accuracy: 0.9909
+# Precision: 0.4517
+# Recall: 0.3615
+# AUC: 0.9461
+# F1 Score: 0.4016
+
+#Results with everything same as 3rd result but depth changed to 3
+# Accuracy: 0.9910
+# Precision: 0.4671
+# Recall: 0.4344
+# AUC: 0.9668
+# F1 Score: 0.4502

@@ -164,27 +164,12 @@ print(f"F1 Score: {f1:.4f}")
 
 #Results with sin and cos features as numerical and everything else as categorical
 # Accuracy: 0.9915
-# Precision: 0.4755
-# Recall: 0.0991
-# AUC: 0.9159
-# F1 Score: 0.1641
-
-# Test Set Results:
-# Accuracy: 0.9915
 # Precision: 0.0000
 # Recall: 0.0000
 # AUC: 0.9093
 # F1 Score: 0.0000
 
 # Results with week of day as numerical and everything else as categorical. Sin and cos removed.
-# Accuracy: 0.9926
-# Precision: 0.6469
-# Recall: 0.2857
-# AUC: 0.8514
-# F1 Score: 0.3964
-
-
-# Test Set Results:
 # Accuracy: 0.9915
 # Precision: 0.0000
 # Recall: 0.0000

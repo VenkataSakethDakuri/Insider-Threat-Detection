@@ -5,7 +5,6 @@ import numpy as np
 from imblearn.over_sampling import SMOTENC
 from catboost import CatBoostClassifier
 from sklearn.metrics import roc_auc_score, f1_score
-# from catboost import get_gpu_device_count
 
 with open('user_device.json') as f:
     user_map = json.load(f)
@@ -127,18 +126,6 @@ model_params = {
 
 model_params['task_type'] = 'CPU'  # Default to CPU
 
-# n_gpus = get_gpu_device_count()
-
-# if n_gpus > 0:
-#     print(f"Found {n_gpus} GPU(s). Training on GPU.")
-#     model_params['task_type'] = 'GPU'
-#     # Create the device string, e.g., '0:1:2' for 3 GPUs
-#     model_params['devices'] = ':'.join([str(i) for i in range(n_gpus)])
-# else:
-#     print(f"No GPU found. Training on CPU.")
-#     # No 'task_type' needed, defaults to 'CPU'
-
-# Initialize the model
 model = CatBoostClassifier(**model_params)
 
 model.fit(
@@ -150,7 +137,7 @@ model.fit(
 
 # Evaluate on test set
 y_pred_proba = model.predict_proba(X_test)[:, 1]
-y_pred = (y_pred_proba >= 0.5).astype(int)
+y_pred = (y_pred_proba >= 0.08).astype(int)
 
 auc = roc_auc_score(y_test, y_pred_proba)
 f1 = f1_score(y_test, y_pred)
@@ -175,3 +162,31 @@ print(f"F1 Score: {f1:.4f}")
 # Recall: 0.0000
 # AUC: 0.8220
 # F1 Score: 0.0000
+
+# Results with all features as categorical. Sin and cos as numerical features. Threshold 0.2, above 0.5 gives 0 precision and recall.
+# Accuracy: 0.9912
+# Precision: 0.1282
+# Recall: 0.0073
+# AUC: 0.9093
+# F1 Score: 0.0138
+
+# Results with all features as categorical. Sin and cos as numerical features. Threshold 0.02
+# Accuracy: 0.9908
+# Precision: 0.4554
+# Recall: 0.4315
+# AUC: 0.9093
+# F1 Score: 0.4431
+
+# Results with all features as categorical. Sin and cos as numerical features. Threshold 0.002
+# Accuracy: 0.9877
+# Precision: 0.3293
+# Recall: 0.4344
+# AUC: 0.9093
+# F1 Score: 0.3746
+
+# Results with all features as categorical. Sin and cos as numerical features. Threshold 0.08
+# Accuracy: 0.9905
+# Precision: 0.1929
+# Recall: 0.0394
+# AUC: 0.9093
+# F1 Score: 0.0654

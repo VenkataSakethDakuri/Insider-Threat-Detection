@@ -58,7 +58,7 @@ def custom_downsampler(X_train, y_train):
 
     
     minority_count = len(minority_classes)
-    filtered_majority_indices = np.random.choice(majority_indices, size=100*minority_count, replace=False)
+    filtered_majority_indices = np.random.choice(majority_indices, size=minority_count, replace=False)
 
 
     balanced_indices = np.concatenate([filtered_majority_indices, minority_indices])
@@ -200,9 +200,16 @@ print(f"Recall: {( ( (y_test == 1) & (y_pred == 1) ).sum() ) / ( (y_test == 1).s
 print(f"AUC: {auc:.4f}")
 print(f"F1 Score: {f1:.4f}")
 
-#With all features and downsampling
+#With all features and downsampling to 100 times minority class size
 # #Accuracy: 0.9913
 # Precision: 0.0909
 # Recall: 0.0029
 # AUC: 0.9374
 # F1 Score: 0.0056
+
+# With all features and downsampling to minority class size
+# Accuracy: 0.9905
+# Precision: 0.0784
+# Recall: 0.0117
+# AUC: 0.8962
+# F1 Score: 0.0203

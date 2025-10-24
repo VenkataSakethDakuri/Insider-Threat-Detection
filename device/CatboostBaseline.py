@@ -4,7 +4,6 @@ import pandas as pd
 import numpy as np
 from catboost import CatBoostClassifier
 from sklearn.metrics import roc_auc_score, f1_score
-# from catboost import get_gpu_device_count
 
 with open('user_device.json') as f:
     user_map = json.load(f)
@@ -126,18 +125,6 @@ model_params = {
 
 model_params['task_type'] = 'CPU'  # Default to CPU
 
-# n_gpus = get_gpu_device_count()
-
-# if n_gpus > 0:
-#     print(f"Found {n_gpus} GPU(s). Training on GPU.")
-#     model_params['task_type'] = 'GPU'
-#     # Create the device string, e.g., '0:1:2' for 3 GPUs
-#     model_params['devices'] = ':'.join([str(i) for i in range(n_gpus)])
-# else:
-#     print(f"No GPU found. Training on CPU.")
-#     # No 'task_type' needed, defaults to 'CPU'
-
-# Initialize the model
 model = CatBoostClassifier(**model_params)
 
 model.fit(

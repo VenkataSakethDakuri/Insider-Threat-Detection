@@ -6,7 +6,8 @@ from sklearn.preprocessing import LabelEncoder, StandardScaler
 from catboost import CatBoostClassifier, Pool
 from imblearn.over_sampling import SMOTENC
 from sklearn.ensemble import RandomForestClassifier, VotingClassifier
-from sklearn.metrics import classification_report, confusion_matrix, precision_recall_curve, f1_score
+from sklearn.metrics import precision_recall_curve, f1_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -84,13 +85,12 @@ X_val, y_val = X.iloc[train_end:val_end], y.iloc[train_end:val_end]
 X_test, y_test = X.iloc[val_end:], y.iloc[val_end:]
 
 categorical_features_indices = [feature_cols.index('activity_encoded'), feature_cols.index('role_encoded')]
-smotenc = SMOTENC(categorical_features=categorical_features_indices, random_state=42, k_neighbors=5)
+smotenc = SMOTENC(categorical_features=categorical_features_indices, random_state=108, k_neighbors=5)
 X_train_res, y_train_res = smotenc.fit_resample(X_train, y_train)
 
 # 8. Ensemble Model (CatBoost + RF voting)
-cb = CatBoostClassifier(iterations=1500, learning_rate=0.07, depth=7, scale_pos_weight=y_train_res.shape[0]/y_train_res.sum(),
-                        eval_metric='F1', loss_function='Logloss', random_seed=42, verbose=100, early_stopping_rounds=70)
-rf = RandomForestClassifier(n_estimators=200, random_state=42, class_weight='balanced')
+cb = CatBoostClassifier(iterations=1500, learning_rate=0.07, depth=7, eval_metric='AUC', loss_function='Logloss', random_seed=108, verbose=100, early_stopping_rounds=70)
+rf = RandomForestClassifier(n_estimators=200, random_state=108)
 ensemble = VotingClassifier([('catboost', cb), ('rf', rf)], voting='soft')
 
 ensemble.fit(X_train_res, y_train_res)
@@ -102,12 +102,20 @@ best_thr = thresholds[np.argmax(f1_scores)] if len(thresholds) else 0.5
 # 9. Evaluate
 y_test_pred_proba = ensemble.predict_proba(X_test)[:,1]
 y_test_pred = (y_test_pred_proba >= best_thr).astype(int)
-print("==== Ensemble (CatBoost + RF) ====")
-print(classification_report(y_test, y_test_pred, target_names=['Normal', 'Threat'], zero_division=0))
-print("Confusion Matrix:", confusion_matrix(y_test, y_test_pred))
+print("==== Test Set Results ====")
+print(f"Accuracy:  {accuracy_score(y_test, y_test_pred):.4f}")
+print(f"Precision: {precision_score(y_test, y_test_pred, zero_division=0):.4f}")
+print(f"Recall:    {recall_score(y_test, y_test_pred, zero_division=0):.4f}")
+print(f"F1 Score:  {f1_score(y_test, y_test_pred, zero_division=0):.4f}")
 
-# 10. Most Important Features (from CatBoost only)
-cb.fit(X_train_res, y_train_res)
-feature_importance = pd.Series(cb.get_feature_importance(), index=feature_cols).sort_values(ascending=False)
-print("Top CatBoost Features:\n", feature_importance.head(10))
+# Get CatBoost feature importance
+cb_importance = ensemble.named_estimators_['catboost'].get_feature_importance()
+cb_df = pd.Series(cb_importance, index=feature_cols)
 
+# Get RandomForest feature importance
+rf_importance = ensemble.named_estimators_['rf'].feature_importances_
+rf_df = pd.Series(rf_importance, index=feature_cols)
+
+# 10. Ensemble Feature Importance
+avg_importance = (cb_df + rf_df) / 2
+print("Top Ensemble Features:\n", avg_importance.sort_values(ascending=False).head(10))

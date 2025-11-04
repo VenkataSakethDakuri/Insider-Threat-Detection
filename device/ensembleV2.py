@@ -35,26 +35,30 @@ df['is_weekend'] = df['Timestamp'].dt.dayofweek >= 5
 df['user_encoded'] = LabelEncoder().fit_transform(df['user'])
 df['pc_encoded'] = LabelEncoder().fit_transform(df['pc'])
 df['role_encoded'] = LabelEncoder().fit_transform(df['Role'].fillna("None"))
+
+df['time_since_last'] = df.groupby('user')['Timestamp'].diff().dt.total_seconds().fillna(0)
+df['rolling_10_count'] = df.groupby('user')['activity_encoded'].rolling(10, min_periods=1).sum().reset_index(level=0, drop=True).shift(1)
+df['rolling_100_count'] = df.groupby('user')['activity_encoded'].rolling(100, min_periods=1).sum().reset_index(level=0, drop=True).shift(1)
 n = len(df); train_end = int(n * 0.7); val_end = int(n * 0.8)
 df_train = df.iloc[:train_end].copy()
 df_val   = df.iloc[train_end:val_end].copy()
 df_test  = df.iloc[val_end:].copy()
 
 # Training features (No need to iterate one by one)
-df_train['time_since_last'] = df_train.groupby('user')['Timestamp'].diff().dt.total_seconds().fillna(0)
-df_train['rolling_10_count'] = df_train.groupby('user')['activity'].rolling(10, min_periods=1).count().reset_index(level=0, drop=True)
-df_train['rolling_100_count'] = df_train.groupby('user')['activity'].rolling(100, min_periods=1).count().reset_index(level=0, drop=True)
+# df_train['time_since_last'] = df_train.groupby('user')['Timestamp'].diff().dt.total_seconds().fillna(0)
+# df_train['rolling_10_count'] = df_train.groupby('user')['activity_encoded'].rolling(10, min_periods=1).sum().reset_index(level=0, drop=True).shift(1)
+# df_train['rolling_100_count'] = df_train.groupby('user')['activity_encoded'].rolling(100, min_periods=1).sum().reset_index(level=0, drop=True).shift(1)
 
-df_train['rolling_3_anomaly'] = df_train.groupby('user')['label'].rolling(3, min_periods=1).mean().reset_index(level=0, drop=True)
-df_train['rolling_10_anomaly'] = df_train.groupby('user')['label'].rolling(10, min_periods=1).mean().reset_index(level=0, drop=True)
-df_train['rolling_20_anomaly'] = df_train.groupby('user')['label'].rolling(20, min_periods=1).mean().reset_index(level=0, drop=True)
+df_train['rolling_3_anomaly'] = df_train.groupby('user')['label'].rolling(3, min_periods=1).mean().reset_index(level=0, drop=True).shift(1)
+df_train['rolling_10_anomaly'] = df_train.groupby('user')['label'].rolling(10, min_periods=1).mean().reset_index(level=0, drop=True).shift(1)
+df_train['rolling_20_anomaly'] = df_train.groupby('user')['label'].rolling(20, min_periods=1).mean().reset_index(level=0, drop=True).shift(1)
 df_train['anomaly_momentum'] = df_train['rolling_10_anomaly'] - df_train['rolling_20_anomaly']
 
 df_train['user_gap_mean'] = df_train.groupby('user')['time_since_last'].transform('mean')
 df_train['user_gap_std'] = df_train.groupby('user')['time_since_last'].transform('std').replace(0,1)
 df_train['gap_zscore'] = (df_train['time_since_last'] - df_train['user_gap_mean']) / df_train['user_gap_std']
 
-pc_freq = df_train['pc'].value_counts()
+pc_freq = df_train['pc'].value_counts().to_dict()
 df_train['rare_pc_flag'] = df_train['pc'].map(pc_freq) < 10
 
 df_train['rare_hour_for_user'] = (
@@ -83,8 +87,8 @@ feature_cols = [
 df_val['user_degree'] = 0.0
 df_val['pc_degree'] = 0.0
 df_val['time_since_last'] = 0.0
-df_val['rolling_10_count'] = 0.0
-df_val['rolling_100_count'] = 0.0
+df_val['rolling_10_count'] = 0
+df_val['rolling_100_count'] = 0
 df_val['rolling_3_anomaly'] = 0.0
 df_val['rolling_10_anomaly'] = 0.0
 df_val['rolling_20_anomaly'] = 0.0
@@ -96,7 +100,19 @@ df_val['user_gap_std'] = 1.0
 df_val['gap_zscore'] = 0.0
 
 G_val = nx.Graph()
+# Copy the training graph structure
 G_val.add_edges_from(df_train[['user', 'pc']].drop_duplicates().values.tolist())
+
+# df_val['time_since_last'] = df_val.groupby('user')['Timestamp'].diff().dt.total_seconds().fillna(0)
+# df_val['rolling_10_count'] = df_val.groupby('user')['activity_encoded'].rolling(10, min_periods=1).sum().reset_index(level=0, drop=True).shift(1)
+# df_val['rolling_100_count'] = df_val.groupby('user')['activity_encoded'].rolling(100, min_periods=1).sum().reset_index(level=0, drop=True).shift(1)
+
+df_val['rolling_3_anomaly'] = df_val.groupby('user')['label'].rolling(3, min_periods=1).mean().reset_index(level=0, drop=True).shift(1)
+df_val['rolling_10_anomaly'] = df_val.groupby('user')['label'].rolling(10, min_periods=1).mean().reset_index(level=0, drop=True).shift(1)
+df_val['rolling_20_anomaly'] = df_val.groupby('user')['label'].rolling(20, min_periods=1).mean().reset_index(level=0, drop=True).shift(1)
+df_val['anomaly_momentum'] = df_val['rolling_10_anomaly'] - df_val['rolling_20_anomaly']
+
+
 
 for i in range(len(df_val)):
     user = df_val.iloc[i]['user']
@@ -104,17 +120,17 @@ for i in range(len(df_val)):
     hist = df_train[df_train['user'] == user]
     user_full = pd.concat([hist, df_val.iloc[[i]]]).sort_values('Timestamp')
     idx = df_val.index[i]
-    df_val.at[idx, 'time_since_last'] = user_full['Timestamp'].diff().dt.total_seconds().fillna(0).loc[idx]
-    for w in [3,10,20]:
-        df_val.at[idx, f'rolling_{w}_anomaly'] = user_full['label'].rolling(w, min_periods=1).mean().loc[idx]
-    for w in [10,100]:
-        df_val.at[idx, f'rolling_{w}_count'] = user_full['activity'].rolling(w, min_periods=1).count().loc[idx]
     df_val.at[idx, 'user_gap_mean'] = user_full['time_since_last'].expanding().mean().loc[idx]
     df_val.at[idx, 'user_gap_std'] = user_full['time_since_last'].expanding().std().replace(0, 1).loc[idx]
     df_val.at[idx, 'gap_zscore'] = (df_val.at[idx, 'time_since_last'] - df_val.at[idx, 'user_gap_mean']) / df_val.at[idx, 'user_gap_std']
-    df_val.at[idx, 'anomaly_momentum'] = df_val.at[idx, 'rolling_10_anomaly'] - df_val.at[idx, 'rolling_20_anomaly']
+
+    #update pc into pc frequency
+    pc_freq[pc] = pc_freq.get(pc, 0) + 1
+    df_val.at[idx, 'pc_freq'] = pc_freq.get(pc, 0)
+
     df_val.at[idx, 'rare_pc_flag'] = int(pc_freq.get(pc, 0) < 10)
     df_val.at[idx, 'rare_hour_for_user'] = int(user_full['hour'].value_counts().get(user_full.loc[idx, 'hour'], 0) < 3)
+
     G_val.add_edge(user, pc)
     df_val.at[idx, 'user_degree'] = G_val.degree(user)
     df_val.at[idx, 'pc_degree']   = G_val.degree(pc)
@@ -144,22 +160,24 @@ G_test = nx.Graph()
 G_test.add_edges_from(pd.concat([df_train, df_val])[['user', 'pc']].drop_duplicates().values.tolist())
 
 # Initialize all feature columns for df_test
-df_val['user_degree'] = 0.0
-df_val['pc_degree'] = 0.0
-df_val['time_since_last'] = 0.0
-df_val['rolling_10_count'] = 0.0
-df_val['rolling_100_count'] = 0.0
-df_val['rolling_3_anomaly'] = 0.0
-df_val['rolling_10_anomaly'] = 0.0
-df_val['rolling_20_anomaly'] = 0.0
-df_val['anomaly_momentum'] = 0.0
-df_val['rare_pc_flag'] = 0
-df_val['rare_hour_for_user'] = 0
-df_val['user_gap_mean'] = 0.0
-df_val['user_gap_std'] = 1.0
-df_val['gap_zscore'] = 0.0
+df_test['user_degree'] = 0.0
+df_test['pc_degree'] = 0.0
+df_test['time_since_last'] = 0.0
+df_test['rolling_10_count'] = 0
+df_test['rolling_100_count'] = 0
+df_test['rolling_3_anomaly'] = 0.0
+df_test['rolling_10_anomaly'] = 0.0
+df_test['rolling_20_anomaly'] = 0.0
+df_test['anomaly_momentum'] = 0.0
+df_test['rare_pc_flag'] = 0
+df_test['rare_hour_for_user'] = 0
+df_test['user_gap_mean'] = 0.0
+df_test['user_gap_std'] = 1.0
+df_test['gap_zscore'] = 0.0
 
 y_test_pred_proba = []
+
+y_test_copy = y_test.copy()
 
 for i in range(len(df_test)):
     user = df_test.iloc[i]['user']
@@ -168,31 +186,38 @@ for i in range(len(df_test)):
     hist = hist[hist['user'] == user]
     user_full = pd.concat([hist, df_test.iloc[[i]]]).sort_values('Timestamp')
     idx = df_test.index[i]
-    df_test.at[idx, 'time_since_last'] = user_full['Timestamp'].diff().dt.total_seconds().fillna(0).loc[idx]
+    # df_test.at[idx, 'time_since_last'] = user_full['Timestamp'].diff().dt.total_seconds().fillna(0).loc[idx]
     for w in [3,10,20]:
-        df_test.at[idx, f'rolling_{w}_anomaly'] = user_full['label'].rolling(w, min_periods=1).mean().loc[idx]
-    for w in [10,100]:
-        df_test.at[idx, f'rolling_{w}_count'] = user_full['activity'].rolling(w, min_periods=1).count().loc[idx]
+        df_test.at[idx, f'rolling_{w}_anomaly'] = user_full['label'].rolling(w, min_periods=1).mean().shift(1).loc[idx]
+    # for w in [10,100]:
+    #     df_test.at[idx, f'rolling_{w}_count'] = user_full['activity'].rolling(w, min_periods=1).count().loc[idx]
     df_test.at[idx, 'user_gap_mean'] = user_full['time_since_last'].expanding().mean().loc[idx]
     df_test.at[idx, 'user_gap_std'] = user_full['time_since_last'].expanding().std().replace(0, 1).loc[idx]
     df_test.at[idx, 'gap_zscore'] = (df_test.at[idx, 'time_since_last'] - df_test.at[idx, 'user_gap_mean']) / df_test.at[idx, 'user_gap_std']
     df_test.at[idx, 'anomaly_momentum'] = df_test.at[idx, 'rolling_10_anomaly'] - df_test.at[idx, 'rolling_20_anomaly']
+
+    #update pc into pc frequency
+    pc_freq[pc] = pc_freq.get(pc, 0) + 1
     df_test.at[idx, 'rare_pc_flag'] = int(pc_freq.get(pc, 0) < 10)
     df_test.at[idx, 'rare_hour_for_user'] = int(user_full['hour'].value_counts().get(user_full.loc[idx, 'hour'], 0) < 3)
+
     G_test.add_edge(user, pc)
     df_test.at[idx, 'user_degree'] = G_test.degree(user)
     df_test.at[idx, 'pc_degree']   = G_test.degree(pc)
+
     prediction = ensemble.predict_proba(df_test.loc[[idx], feature_cols].replace([np.inf, -np.inf], 0).fillna(0))[:, 1]
     y_test_pred_proba.append(prediction[0])
+    decision = prediction[0] >= best_thr
+    df_test.at[idx, 'label'] = 1 if decision else 0
 
 y_test_pred_proba = np.array(y_test_pred_proba)
 y_test_pred = (y_test_pred_proba >= best_thr).astype(int)
 
 print("==== Test Set Results ====")
-print(f"Accuracy: {accuracy_score(y_test, y_test_pred):.4f}")
-print(f"Precision: {precision_score(y_test, y_test_pred, zero_division=0):.4f}")
-print(f"Recall: {recall_score(y_test, y_test_pred, zero_division=0):.4f}")
-print(f"F1 Score: {f1_score(y_test, y_test_pred, zero_division=0):.4f}")
+print(f"Accuracy: {accuracy_score(y_test_copy, y_test_pred):.4f}")
+print(f"Precision: {precision_score(y_test_copy, y_test_pred, zero_division=0):.4f}")
+print(f"Recall: {recall_score(y_test_copy, y_test_pred, zero_division=0):.4f}")
+print(f"F1 Score: {f1_score(y_test_copy, y_test_pred, zero_division=0):.4f}")
 cb_importance = ensemble.named_estimators_['catboost'].get_feature_importance()
 cb_df = pd.Series(cb_importance, index=feature_cols)
 rf_importance = ensemble.named_estimators_['rf'].feature_importances_

@@ -137,7 +137,8 @@ for i in range(len(df_val)):
     
 X_train, y_train = df_train[feature_cols].replace([np.inf, -np.inf], 0).fillna(0).infer_objects(copy=False), df_train['label']
 X_val, y_val = df_val[feature_cols].replace([np.inf, -np.inf], 0).fillna(0).infer_objects(copy=False), df_val['label']
-X_test, y_test = df_test[feature_cols].replace([np.inf, -np.inf], 0).fillna(0).infer_objects(copy=False), df_test['label']
+#X_test, y_test = df_test[feature_cols].replace([np.inf, -np.inf], 0).fillna(0).infer_objects(copy=False), df_test['label']
+y_test = df_test['label']
 cat_idx = [feature_cols.index(f) for f in [
     'activity_encoded', 'role_encoded', 'rare_pc_flag', 'rare_hour_for_user', 'is_weekend', 'dayofweek'
 ]]

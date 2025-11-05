@@ -6,8 +6,8 @@ from sklearn.ensemble import RandomForestClassifier, VotingClassifier
 from sklearn.metrics import precision_recall_curve, accuracy_score, precision_score, recall_score, f1_score, roc_curve, auc
 import matplotlib.pyplot as plt
 
-
-df = pd.read_csv("/home/gururaj/datasets/PROCESSED_CERT+ROLES/device_conv.csv")
+#/home/gururaj/datasets/PROCESSED_CERT+ROLES/device_conv.csv
+df = pd.read_csv("C:\\Users\\DELL\\device_conv.csv")
 df['anomaly_status'] = df['anomaly_status'].replace({2: 1, 3: 1})
 QUOTE = r"['\u2018\u2019\"\u201C\u201D]"
 def parse_query(q):
@@ -67,7 +67,7 @@ df_train['rare_hour_for_user'] = (
     df_train.groupby('user')['hour'].transform(lambda x: x.map(x.value_counts())) < 3
 ).astype(int)
 
-df_train['connects_per_hour'] = df_train.groupby(['user', df_train['Timestamp'].dt.floor('H')])['activity_encoded'].transform('sum')
+df_train['connects_per_hour'] = df_train.groupby(['user', df_train['Timestamp'].dt.floor('h')])['activity_encoded'].transform('sum')
 
 
 # Graph Features
@@ -122,7 +122,7 @@ df_val['rolling_20_anomaly'] = df_val.groupby('user')['label'].rolling(20, min_p
 df_val['rolling_50_anomaly'] = df_val.groupby('user')['label'].rolling(50, min_periods=1).mean().reset_index(level=0, drop=True).shift(1)
 df_val['anomaly_momentum'] = df_val['rolling_10_anomaly'] - df_val['rolling_20_anomaly']
 
-df_val['connects_per_hour'] = df_val.groupby(['user', df_val['Timestamp'].dt.floor('H')])['activity_encoded'].transform('sum')
+df_val['connects_per_hour'] = df_val.groupby(['user', df_val['Timestamp'].dt.floor('h')])['activity_encoded'].transform('sum')
 
 # Cache user histories for faster lookup
 user_hist_train = {user: df_train[df_train['user'] == user] for user in df_val['user'].unique()}
@@ -154,14 +154,14 @@ X_val, y_val = df_val[feature_cols].replace([np.inf, -np.inf], 0).fillna(0).infe
 #X_test, y_test = df_test[feature_cols].replace([np.inf, -np.inf], 0).fillna(0).infer_objects(copy=False), df_test['label']
 y_test = df_test['label']
 cat_idx = [feature_cols.index(f) for f in [
-    'activity_encoded', 'role_encoded', 'rare_pc_flag', 'rare_hour_for_user', 'is_weekend', 'dayofweek'
+    'activity_encoded', 'role_encoded', 'rare_pc_flag', 'rare_hour_for_user', 'is_weekend', 'dayofweek', 'is_after_hours', 
 ]]
 
 # smotenc = SMOTENC(categorical_features=cat_idx, random_state=108, k_neighbors=5)
 # X_train_res, y_train_res = smotenc.fit_resample(X_train, y_train)
 
 cb = CatBoostClassifier(iterations=1500, learning_rate=0.07, depth=7, eval_metric='AUC',
-        loss_function='Logloss', random_seed=108, verbose=100, early_stopping_rounds=70, auto_class_weights='Balanced',)
+        loss_function='Logloss', random_seed=108, verbose=100, early_stopping_rounds=70, auto_class_weights='Balanced', cat_features=cat_idx)
 rf = RandomForestClassifier(n_estimators=200, random_state=108)
 ensemble = VotingClassifier([('catboost', cb), ('rf', rf)], voting='soft')
 ensemble.fit(X_train, y_train)
@@ -190,6 +190,7 @@ df_test['rare_hour_for_user'] = 0
 df_test['user_gap_mean'] = 0.0
 df_test['user_gap_std'] = 1.0
 df_test['gap_zscore'] = 0.0
+df_test['connects_per_hour'] = 0
 
 y_test_pred_proba = []
 
@@ -217,7 +218,7 @@ for user in df_test['user'].unique():
         # Initialize connects per hour from history
         user_hour_connects[user] = {}
         for _, h_row in hist.iterrows():
-            hour_ts = h_row['Timestamp'].floor('H')
+            hour_ts = h_row['Timestamp'].floor('h')
             if h_row['activity_encoded'] == 1:  # Connect activity
                 user_hour_connects[user][hour_ts] = user_hour_connects[user].get(hour_ts, 0) + 1
     else:
@@ -232,15 +233,17 @@ for i in range(len(df_test)):
     user = row['user']
     pc = row['pc']
 
+    idx = df_test.index[i]
+
     # If Connect is anomaly, disconnect is also anomaly
-    if bool_map[df_test.at[i, 'user_encoded'], df_test.at[i, 'pc_encoded']] == True:
-        bool_map[df_test.at[i, 'user_encoded'], df_test.at[i, 'pc_encoded']] = False
+    if bool_map[df_test.at[idx, 'user_encoded'], df_test.at[idx, 'pc_encoded']] == True:
+        bool_map[df_test.at[idx, 'user_encoded'], df_test.at[idx, 'pc_encoded']] = False
         y_test_pred_proba.append(1)
         continue
 
     hist = user_hist_trainval.get(user, pd.DataFrame())
     user_full = pd.concat([hist, df_test.iloc[[i]]]).sort_values('Timestamp')
-    idx = df_test.index[i]
+
     # df_test.at[idx, 'time_since_last'] = user_full['Timestamp'].diff().dt.total_seconds().fillna(0).loc[idx]
     for w in [3,10,20,50]:
         df_test.at[idx, f'rolling_{w}_anomaly'] = user_full['label'].rolling(w, min_periods=1).mean().shift(1).loc[idx]
@@ -263,7 +266,7 @@ for i in range(len(df_test)):
     user_hour_counts[user][current_hour] = hour_count + 1
 
     # Compute connects_per_hour based on data up to this point
-    hour_ts = row['Timestamp'].floor('H')
+    hour_ts = row['Timestamp'].floor('h')
     connects_in_hour = user_hour_connects[user].get(hour_ts, 0)
     df_test.at[idx, 'connects_per_hour'] = connects_in_hour
     
@@ -281,7 +284,7 @@ for i in range(len(df_test)):
     df_test.at[idx, 'label'] = 1 if decision else 0
     # Update bool_map for the current user and pc if predicted as anomaly
     if decision == True:
-        bool_map[df_test.at[i, 'user_encoded'], df_test.at[i, 'pc_encoded']] = True
+        bool_map[df_test.at[idx, 'user_encoded'], df_test.at[idx, 'pc_encoded']] = True
 
 y_test_pred_proba = np.array(y_test_pred_proba)
 y_test_pred = (y_test_pred_proba >= best_thr).astype(int)

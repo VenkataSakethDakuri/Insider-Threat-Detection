@@ -1,26 +1,18 @@
-import pandas as pd
-import numpy as np
-import re
-import networkx as nx
+import pandas as pd, numpy as np, re, networkx as nx
 from sklearn.preprocessing import LabelEncoder
-from catboost import CatBoostClassifier, Pool
+from catboost import CatBoostClassifier
 from imblearn.over_sampling import SMOTENC
 from sklearn.ensemble import RandomForestClassifier, VotingClassifier
 from sklearn.metrics import precision_recall_curve, accuracy_score, precision_score, recall_score, f1_score, roc_curve, auc
 import matplotlib.pyplot as plt
-import warnings
-warnings.filterwarnings('ignore')
 
-# 1. Load and Map Labels
+
 df = pd.read_csv("/home/gururaj/datasets/PROCESSED_CERT+ROLES/email_conv.csv")
 df['anomaly_status'] = df['anomaly_status'].replace({2: 1, 3: 1})
-df['label'] = df['anomaly_status'].apply(lambda x: 0 if x == 0 else 1)
-
-# 2. Parse Query for fields
 QUOTE = r"['\u2018\u2019\"\u201C\u201D]"
-def parse_email_query(query):
-    if pd.isna(query): return {'user': None, 'pc': None, 'to': None, 'cc': None, 'bcc': None, 'from_addr': None}
-    q = str(query)
+def parse_query(q):
+    if pd.isna(q): return {'user': None, 'pc': None, 'to': None, 'cc': None, 'bcc': None, 'from_addr': None}
+    q = str(q)
     user = re.search(rf"user\s*=\s*{QUOTE}([\w\d]+){QUOTE}", q)
     pc = re.search(rf"pc\s*=\s*{QUOTE}([\w\d\-]+){QUOTE}", q)
     to  = re.search(rf"SELECT\s+{QUOTE}(.+?){QUOTE}\s+AS\s+to", q)
@@ -35,110 +27,294 @@ def parse_email_query(query):
         'bcc': bcc.group(1) if bcc else None,
         'from_addr': from_addr.group(1) if from_addr else None
     }
-parsed = df['Query'].apply(parse_email_query)
-df['user']      = parsed.apply(lambda x: x['user'])
-df['pc']        = parsed.apply(lambda x: x['pc'])
-df['to']        = parsed.apply(lambda x: x['to'])
-df['cc']        = parsed.apply(lambda x: x['cc'])
-df['bcc']       = parsed.apply(lambda x: x['bcc'])
+
+parsed = df['Query'].apply(parse_query)
+df['user'] = parsed.apply(lambda x: x['user'])
+df['pc'] = parsed.apply(lambda x: x['pc'])
+df['to'] = parsed.apply(lambda x: x['to'])
+df['cc'] = parsed.apply(lambda x: x['cc'])
+df['bcc'] = parsed.apply(lambda x: x['bcc'])
 df['from_addr'] = parsed.apply(lambda x: x['from_addr'])
-df['Timestamp'] = pd.to_datetime(df['Timestamp'], errors='coerce')
-df = df.dropna(subset=['Timestamp', 'user', 'pc', 'Role']).reset_index(drop=True)
+df['Timestamp'] = pd.to_datetime(df['Timestamp'], format='%m-%d-%Y %H:%M', errors='coerce').fillna(pd.to_datetime(df['Timestamp'], format='%m/%d/%Y %H:%M:%S', errors='coerce'))
 
-# 3. Encoding (same naming as device features)
-# - user_encoded, pc_encoded, to_encoded, cc_encoded, bcc_encoded, from_encoded, role_encoded
-encoders = {}
-for col in ['user', 'pc', 'to', 'cc', 'bcc', 'from_addr', 'Role']:
-    encoder = LabelEncoder()
-    df[f'{col.lower()}_encoded'] = encoder.fit_transform(df[col].fillna("None"))
-    encoders[col] = encoder
+#Count of timestamp not properly parsed
+print("Invalid Timestamps:", df['Timestamp'].isna().sum())
 
-# 4. Time features
+df = df.dropna(subset=['Timestamp', 'user', 'pc']).sort_values(['Timestamp']).reset_index(drop=True)
+df['label'] = df['anomaly_status'].apply(lambda x: 0 if x == 0 else 1)
+# df['activity_encoded'] = df['activity'].map({'Connect': 1, 'Disconnect': 0})
 df['hour'] = df['Timestamp'].dt.hour
 df['dayofweek'] = df['Timestamp'].dt.dayofweek
 df['hour_sin'] = np.sin(2 * np.pi * df['hour'] / 24)
 df['hour_cos'] = np.cos(2 * np.pi * df['hour'] / 24)
+df['is_after_hours'] = ((df['hour'] < 8) | (df['hour'] > 18)).astype(int)
+df['is_weekend'] = df['Timestamp'].dt.dayofweek >= 5
+df['user_encoded'] = LabelEncoder().fit_transform(df['user'])
+df['pc_encoded'] = LabelEncoder().fit_transform(df['pc'])
+df['to_encoded'] = LabelEncoder().fit_transform(df['to'].fillna("None"))
+df['cc_encoded'] = LabelEncoder().fit_transform(df['cc'].fillna("None"))
+df['bcc_encoded'] = LabelEncoder().fit_transform(df['bcc'].fillna("None"))
+df['from_addr_encoded'] = LabelEncoder().fit_transform(df['from_addr'].fillna("None"))
+df['role_encoded'] = LabelEncoder().fit_transform(df['Role'].fillna("None"))
 
-# 5. Feature Engineering 
 df['time_since_last'] = df.groupby('user')['Timestamp'].diff().dt.total_seconds().fillna(0)
-df['rolling_10_count'] = df.groupby('user')['to'].rolling(10, min_periods=1).count().reset_index(level=0, drop=True)
-df['rolling_100_count'] = df.groupby('user')['to'].rolling(100, min_periods=1).count().reset_index(level=0, drop=True)
-df['rolling_10_anomaly'] = df.groupby('user')['label'].rolling(10, min_periods=1).mean().reset_index(level=0, drop=True)
-df['rolling_3_anomaly']  = df.groupby('user')['label'].rolling(3, min_periods=1).mean().reset_index(level=0, drop=True)
-df['rolling_20_anomaly'] = df.groupby('user')['label'].rolling(20, min_periods=1).mean().reset_index(level=0, drop=True)
-df['anomaly_momentum']   = df['rolling_10_anomaly'] - df['rolling_20_anomaly']
+# df['rolling_10_count'] = df.groupby('user')['activity_encoded'].rolling(10, min_periods=1).sum().reset_index(level=0, drop=True).shift(1)
+# df['rolling_100_count'] = df.groupby('user')['activity_encoded'].rolling(100, min_periods=1).sum().reset_index(level=0, drop=True).shift(1)
+n = len(df); train_end = int(n * 0.7); val_end = int(n * 0.8)
+df_train = df.iloc[:train_end].copy()
+df_val   = df.iloc[train_end:val_end].copy()
+df_test  = df.iloc[val_end:].copy()
 
-df['user_gap_mean'] = df.groupby('user')['time_since_last'].transform('mean')
-df['user_gap_std']  = df.groupby('user')['time_since_last'].transform('std').replace(0,1)
-df['gap_zscore']    = (df['time_since_last'] - df['user_gap_mean']) / df['user_gap_std']
+# Training features (No need to iterate one by one)
+# df_train['time_since_last'] = df_train.groupby('user')['Timestamp'].diff().dt.total_seconds().fillna(0)
+# df_train['rolling_10_count'] = df_train.groupby('user')['activity_encoded'].rolling(10, min_periods=1).sum().reset_index(level=0, drop=True).shift(1)
+# df_train['rolling_100_count'] = df_train.groupby('user')['activity_encoded'].rolling(100, min_periods=1).sum().reset_index(level=0, drop=True).shift(1)
 
-to_freq = df['to'].value_counts()
-df['rare_to_flag'] = df['to'].map(to_freq) < 10
+df_train['rolling_3_anomaly'] = df_train.groupby('user')['label'].rolling(3, min_periods=1).reset_index(level=0, drop=True).shift(1)
+df_train['rolling_10_anomaly'] = df_train.groupby('user')['label'].rolling(10, min_periods=1).reset_index(level=0, drop=True).shift(1)
+df_train['rolling_20_anomaly'] = df_train.groupby('user')['label'].rolling(20, min_periods=1).reset_index(level=0, drop=True).shift(1)
+df_train['rolling_50_anomaly'] = df_train.groupby('user')['label'].rolling(50, min_periods=1).reset_index(level=0, drop=True).shift(1)
+df_train['anomaly_momentum'] = df_train['rolling_10_anomaly'] - df_train['rolling_20_anomaly']
 
-df['rare_hour_for_user'] = (
-    df.groupby('user')['hour'].transform(lambda x: x.map(x.value_counts())) < 3
+df_train['user_gap_mean'] = df_train.groupby('user')['time_since_last'].transform('mean')
+df_train['user_gap_std'] = df_train.groupby('user')['time_since_last'].transform('std').replace(0,1)
+df_train['gap_zscore'] = (df_train['time_since_last'] - df_train['user_gap_mean']) / df_train['user_gap_std']
+
+to_freq = df_train['to'].value_counts().to_dict()
+df_train['rare_to_flag'] = df_train['to'].map(to_freq) < 10
+
+df_train['rare_hour_for_user'] = (
+    df_train.groupby('user')['hour'].transform(lambda x: x.map(x.value_counts())) < 3
 ).astype(int)
 
-df['is_after_hours'] = ((df['hour'] < 8) | (df['hour'] > 18)).astype(int)
-df['is_weekend']     = df['Timestamp'].dt.dayofweek >= 5
+df_train['emails_per_hour'] = df_train.groupby(['user', df_train['Timestamp'].dt.floor('h')])['to'].transform('count')
 
-# Graph Features (user-pc)
-G = nx.Graph(); G.add_edges_from(df[['user', 'pc']].drop_duplicates().values.tolist())
-user_degree = dict(G.degree(df['user'].unique()))
-pc_degree   = dict(G.degree(df['pc'].unique()))
-df['user_degree'] = df['user'].map(user_degree).fillna(0)
-df['pc_degree']   = df['pc'].map(pc_degree).fillna(0)
 
-# 6. Features 
+# Graph Features
+# G = nx.Graph(); G.add_edges_from(df_train[['user', 'pc']].drop_duplicates().values.tolist())
+# user_degree = dict(G.degree(df_train['user'].unique()))
+# pc_degree = dict(G.degree(df_train['pc'].unique()))
+# df_train['user_degree'] = df_train['user'].map(user_degree).fillna(0)
+# df_train['pc_degree'] = df_train['pc'].map(pc_degree).fillna(0)
+df_train['user_degree'] = 0.0
+df_train['pc_degree'] = 0.0
+
 feature_cols = [
+    'user_encoded', 'pc_encoded', 'role_encoded', 'to_encoded', 'cc_encoded', 'bcc_encoded', 'from_addr_encoded',
     'hour_sin', 'hour_cos', 'dayofweek',
     'user_degree', 'pc_degree',
-    'user_encoded', 'pc_encoded', 'to_encoded', 'cc_encoded', 'bcc_encoded', 'from_addr_encoded', 'role_encoded',
-    'time_since_last', 'rolling_10_count', 'rolling_100_count', 'rolling_10_anomaly',
+    # 'activity_encoded', 
+    'time_since_last', #'rolling_10_count', 'rolling_100_count', 
     'is_after_hours', 'is_weekend',
-    'rolling_3_anomaly', 'rolling_20_anomaly', 'anomaly_momentum',
+    'rolling_3_anomaly', 'rolling_10_anomaly', 'rolling_20_anomaly', 'rolling_50_anomaly', 'anomaly_momentum',
     'rare_to_flag', 'rare_hour_for_user',
-    'user_gap_mean', 'user_gap_std', 'gap_zscore'
-]
-for col in ['size', 'attachments']:
-    if col in df.columns:
-        feature_cols.append(col)
+    'gap_zscore',
+    'emails_per_hour',
+    ]
 
-X = df[feature_cols].replace([np.inf, -np.inf], 0).fillna(0)
-y = df['label']
+# Initialize all feature columns for df_val
+df_val['user_degree'] = 0.0
+df_val['pc_degree'] = 0.0
+#df_val['time_since_last'] = 0.0
+# df_val['rolling_10_count'] = 0
+# df_val['rolling_100_count'] = 0
+df_val['rolling_3_anomaly'] = 0.0
+df_val['rolling_10_anomaly'] = 0.0
+df_val['rolling_20_anomaly'] = 0.0
+df_val['rolling_50_anomaly'] = 0.0
+df_val['anomaly_momentum'] = 0.0
+df_val['rare_to_flag'] = 0
+df_val['rare_hour_for_user'] = 0
+df_val['user_gap_mean'] = 0.0
+df_val['user_gap_std'] = 0.0
+df_val['gap_zscore'] = 0.0
+df_val['emails_per_hour'] = 0
+# G_val = nx.Graph()
+# # Copy the training graph structure
+# G_val.add_edges_from(df_train[['user', 'pc']].drop_duplicates().values.tolist())
 
-# 7. Split/Balancing/Model 
-n = len(X); train_end = int(n*0.7); val_end = int(n*0.8)
-X_train, y_train = X.iloc[:train_end], y.iloc[:train_end]
-X_val, y_val = X.iloc[train_end:val_end], y.iloc[train_end:val_end]
-X_test, y_test = X.iloc[val_end:], y.iloc[val_end:]
+# df_val['time_since_last'] = df_val.groupby('user')['Timestamp'].diff().dt.total_seconds().fillna(0)
+# df_val['rolling_10_count'] = df_val.groupby('user')['activity_encoded'].rolling(10, min_periods=1).sum().reset_index(level=0, drop=True).shift(1)
+# df_val['rolling_100_count'] = df_val.groupby('user')['activity_encoded'].rolling(100, min_periods=1).sum().reset_index(level=0, drop=True).shift(1)
 
-categorical_features_indices = [feature_cols.index(f) for f in [
-    'user_encoded', 'pc_encoded', 'to_encoded', 'cc_encoded', 'bcc_encoded', 'from_addr_encoded', 'role_encoded', 'rare_to_flag', 'rare_hour_for_user', 'is_weekend', 'dayofweek'
+df_val['rolling_3_anomaly'] = df_val.groupby('user')['label'].rolling(3, min_periods=1).reset_index(level=0, drop=True).shift(1)
+df_val['rolling_10_anomaly'] = df_val.groupby('user')['label'].rolling(10, min_periods=1).reset_index(level=0, drop=True).shift(1)
+df_val['rolling_20_anomaly'] = df_val.groupby('user')['label'].rolling(20, min_periods=1).reset_index(level=0, drop=True).shift(1)
+df_val['rolling_50_anomaly'] = df_val.groupby('user')['label'].rolling(50, min_periods=1).reset_index(level=0, drop=True).shift(1)
+df_val['anomaly_momentum'] = df_val['rolling_10_anomaly'] - df_val['rolling_20_anomaly']
+
+df_val['emails_per_hour'] = df_val.groupby(['user', df_val['Timestamp'].dt.floor('h')])['to'].transform('count')
+
+# Cache user histories for faster lookup
+user_hist_train = {user: df_train[df_train['user'] == user] for user in df_val['user'].unique()}
+
+for i in range(len(df_val)):
+    row = df_val.iloc[i]
+    user = row['user']
+    to = row['to']
+    hist = user_hist_train.get(user, pd.DataFrame())
+    user_full = pd.concat([hist, df_val.iloc[[i]]]).sort_values('Timestamp')
+    idx = df_val.index[i]
+    df_val.at[idx, 'user_gap_mean'] = user_full['time_since_last'].expanding().mean().loc[idx]
+    df_val.at[idx, 'user_gap_std'] = user_full['time_since_last'].expanding().std().replace(0, 1).loc[idx]
+    df_val.at[idx, 'gap_zscore'] = (df_val.at[idx, 'time_since_last'] - df_val.at[idx, 'user_gap_mean']) / df_val.at[idx, 'user_gap_std']
+
+    #update to into to frequency
+    to_freq[to] = to_freq.get(to, 0) + 1
+    #df_val.at[idx, 'to_freq'] = to_freq.get(to, 0)
+
+    df_val.at[idx, 'rare_to_flag'] = int(to_freq.get(to, 0) < 10)
+    df_val.at[idx, 'rare_hour_for_user'] = int(user_full['hour'].value_counts().get(user_full.loc[idx, 'hour'], 0) < 3)
+
+    # G_val.add_edge(user, pc)
+    # df_val.at[idx, 'user_degree'] = G_val.degree(user)
+    # df_val.at[idx, 'pc_degree']   = G_val.degree(pc)
+    
+X_train, y_train = df_train[feature_cols].replace([np.inf, -np.inf], 0).fillna(0).infer_objects(copy=False), df_train['label']
+X_val, y_val = df_val[feature_cols].replace([np.inf, -np.inf], 0).fillna(0).infer_objects(copy=False), df_val['label']
+#X_test, y_test = df_test[feature_cols].replace([np.inf, -np.inf], 0).fillna(0).infer_objects(copy=False), df_test['label']
+y_test = df_test['label']
+cat_idx = [feature_cols.index(f) for f in [
+    'user_encoded', 'pc_encoded', 'role_encoded', 'to_encoded', 'cc_encoded', 'bcc_encoded', 'from_addr_encoded',
+    'rare_to_flag', 'rare_hour_for_user', 'is_weekend', 'dayofweek', 'is_after_hours', 
 ]]
-smotenc = SMOTENC(categorical_features=categorical_features_indices, random_state=108, k_neighbors=5)
-X_train_res, y_train_res = smotenc.fit_resample(X_train, y_train)
+
+# smotenc = SMOTENC(categorical_features=cat_idx, random_state=108, k_neighbors=5)
+# X_train_res, y_train_res = smotenc.fit_resample(X_train, y_train)
 
 cb = CatBoostClassifier(iterations=1500, learning_rate=0.07, depth=7, eval_metric='AUC',
-                        loss_function='Logloss', random_seed=108, verbose=100, early_stopping_rounds=70)
+        loss_function='Logloss', random_seed=108, verbose=100, early_stopping_rounds=70, auto_class_weights='Balanced', cat_features=cat_idx)
 rf = RandomForestClassifier(n_estimators=200, random_state=108)
 ensemble = VotingClassifier([('catboost', cb), ('rf', rf)], voting='soft')
+ensemble.fit(X_train, y_train)
 
-ensemble.fit(X_train_res, y_train_res)
 y_val_pred_proba = ensemble.predict_proba(X_val)[:, 1]
 precisions, recalls, thresholds = precision_recall_curve(y_val, y_val_pred_proba)
 f1_scores = 2 * (precisions * recalls) / (precisions + recalls + 1e-10)
 best_thr = thresholds[np.argmax(f1_scores)] if len(thresholds) else 0.5
 
-y_test_pred_proba = ensemble.predict_proba(X_test)[:,1]
-y_test_pred = (y_test_pred_proba >= best_thr).astype(int)
-print("==== Test Set Results ====")
-print(f"Accuracy: {accuracy_score(y_test, y_test_pred):.4f}")
-print(f"Precision: {precision_score(y_test, y_test_pred, zero_division=0):.4f}")
-print(f"Recall: {recall_score(y_test, y_test_pred, zero_division=0):.4f}")
-print(f"F1 Score: {f1_score(y_test, y_test_pred, zero_division=0):.4f}")
+# G_test = nx.Graph()
+# G_test.add_edges_from(pd.concat([df_train, df_val])[['user', 'pc']].drop_duplicates().values.tolist())
 
-# 8. Feature Importances
+# Initialize all feature columns for df_test
+df_test['user_degree'] = 0.0
+df_test['pc_degree'] = 0.0
+#df_test['time_since_last'] = 0.0
+# df_test['rolling_10_count'] = 0
+# df_test['rolling_100_count'] = 0
+df_test['rolling_3_anomaly'] = 0.0
+df_test['rolling_10_anomaly'] = 0.0
+df_test['rolling_20_anomaly'] = 0.0
+df_test['rolling_50_anomaly'] = 0.0
+df_test['anomaly_momentum'] = 0.0
+df_test['rare_to_flag'] = 0
+df_test['rare_hour_for_user'] = 0
+df_test['user_gap_mean'] = 0.0
+df_test['user_gap_std'] = 1.0
+df_test['gap_zscore'] = 0.0
+df_test['emails_per_hour'] = 0
+
+y_test_pred_proba = []
+
+y_test_copy = y_test.copy()
+
+# Cache combined train+val history for faster lookup
+train_val_combined = pd.concat([df_train, df_val])
+user_hist_trainval = {user: train_val_combined[train_val_combined['user'] == user] for user in df_test['user'].unique()}
+
+# Pre-compute hour value counts for each user from history
+user_hour_counts = {}
+for user in df_test['user'].unique():
+    hist = user_hist_trainval.get(user, pd.DataFrame())
+    if not hist.empty:
+        user_hour_counts[user] = hist['hour'].value_counts().to_dict()
+    else:
+        user_hour_counts[user] = {}
+
+# Initialize dictionaries to track emails per hour
+user_hour_emails = {}  # {user: {hour_timestamp: email_count}}
+
+for user in df_test['user'].unique():
+    hist = user_hist_trainval.get(user, pd.DataFrame())
+    if not hist.empty:
+        # Initialize emails per hour from history
+        user_hour_emails[user] = {}
+        for _, h_row in hist.iterrows():
+            hour_ts = h_row['Timestamp'].floor('h')
+            user_hour_emails[user][hour_ts] = user_hour_emails[user].get(hour_ts, 0) + 1
+    else:
+        user_hour_emails[user] = {}
+
+user_length = df['user'].nunique()
+pc_length = df['pc'].nunique()
+bool_map = np.zeros((user_length, pc_length), dtype=bool)
+
+for i in range(len(df_test)):
+    row = df_test.iloc[i]
+    user = row['user']
+    to = row['to']
+
+    idx = df_test.index[i]
+
+   
+    if bool_map[df_test.at[idx, 'user_encoded'], df_test.at[idx, 'pc_encoded']] == True:
+        bool_map[df_test.at[idx, 'user_encoded'], df_test.at[idx, 'pc_encoded']] = False
+        y_test_pred_proba.append(1)
+        continue
+
+    hist = user_hist_trainval.get(user, pd.DataFrame())
+    user_full = pd.concat([hist, df_test.iloc[[i]]]).sort_values('Timestamp')
+
+    # df_test.at[idx, 'time_since_last'] = user_full['Timestamp'].diff().dt.total_seconds().fillna(0).loc[idx]
+    for w in [3,10,20,50]:
+        df_test.at[idx, f'rolling_{w}_anomaly'] = user_full['label'].rolling(w, min_periods=1).shift(1).loc[idx]
+    # for w in [10,100]:
+    #     df_test.at[idx, f'rolling_{w}_count'] = user_full['activity_encoded'].rolling(w, min_periods=1).sum().shift(1).loc[idx]
+    df_test.at[idx, 'user_gap_mean'] = user_full['time_since_last'].expanding().mean().loc[idx]
+    df_test.at[idx, 'user_gap_std'] = user_full['time_since_last'].expanding().std().replace(0, 1).loc[idx]
+    df_test.at[idx, 'gap_zscore'] = (df_test.at[idx, 'time_since_last'] - df_test.at[idx, 'user_gap_mean']) / df_test.at[idx, 'user_gap_std']
+    df_test.at[idx, 'anomaly_momentum'] = df_test.at[idx, 'rolling_10_anomaly'] - df_test.at[idx, 'rolling_20_anomaly']
+
+    #update to into to frequency
+    to_freq[to] = to_freq.get(to, 0) + 1
+    df_test.at[idx, 'rare_to_flag'] = int(to_freq.get(to, 0) < 10)
+    
+    # Use pre-computed hour counts
+    current_hour = row['hour']
+    hour_count = user_hour_counts[user].get(current_hour, 0)
+    df_test.at[idx, 'rare_hour_for_user'] = int(hour_count < 3)
+    # Update hour counts for next iteration
+    user_hour_counts[user][current_hour] = hour_count + 1
+
+    # Compute emails_per_hour based on data up to this point
+    hour_ts = row['Timestamp'].floor('h')
+    emails_in_hour = user_hour_emails[user].get(hour_ts, 0)
+    df_test.at[idx, 'emails_per_hour'] = emails_in_hour
+    
+    # Update emails_per_hour for next iteration
+    user_hour_emails[user][hour_ts] = emails_in_hour + 1
+
+    # G_test.add_edge(user, pc)
+    # df_test.at[idx, 'user_degree'] = G_test.degree(user)
+    # df_test.at[idx, 'pc_degree']   = G_test.degree(pc)
+
+    prediction = ensemble.predict_proba(df_test.loc[[idx], feature_cols].replace([np.inf, -np.inf], 0).fillna(0))[:, 1]
+    y_test_pred_proba.append(prediction[0])
+    decision = prediction[0] >= best_thr
+    if decision:
+     df_test.at[idx, 'label'] = 1
+    # Update bool_map for the current user and pc if predicted as anomaly
+    if decision == True:
+        bool_map[df_test.at[idx, 'user_encoded'], df_test.at[idx, 'pc_encoded']] = True
+
+y_test_pred_proba = np.array(y_test_pred_proba)
+y_test_pred = (y_test_pred_proba >= best_thr).astype(int)
+
+print("==== Test Set Results ====")
+print(f"Accuracy: {accuracy_score(y_test_copy, y_test_pred):.4f}")
+print(f"Precision: {precision_score(y_test_copy, y_test_pred, zero_division=0):.4f}")
+print(f"Recall: {recall_score(y_test_copy, y_test_pred, zero_division=0):.4f}")
+print(f"F1 Score: {f1_score(y_test_copy, y_test_pred, zero_division=0):.4f}")
 cb_importance = ensemble.named_estimators_['catboost'].get_feature_importance()
 cb_df = pd.Series(cb_importance, index=feature_cols)
 rf_importance = ensemble.named_estimators_['rf'].feature_importances_
@@ -146,20 +322,33 @@ rf_df = pd.Series(rf_importance, index=feature_cols)
 avg_importance = (cb_df + rf_df) / 2
 print("Top Ensemble Features:\n", avg_importance.sort_values(ascending=False).head(20))
 
-# 9. ROC AUC Curve
-fpr, tpr, _ = roc_curve(y_test, y_test_pred_proba)
+#save test set results in json 
+import json
+from datetime import datetime
+
+test_results = {
+    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    "metrics": {
+        "accuracy": float(accuracy_score(y_test_copy, y_test_pred)),
+        "precision": float(precision_score(y_test_copy, y_test_pred, zero_division=0)),
+        "recall": float(recall_score(y_test_copy, y_test_pred, zero_division=0)),
+        "f1_score": float(f1_score(y_test_copy, y_test_pred, zero_division=0))
+    },
+    "threshold": float(best_thr),
+    "top_features": avg_importance.sort_values(ascending=False).head(20).to_dict()
+}
+
+with open('test_results.json', 'w') as f:
+    json.dump(test_results, f, indent=4)
+
+print("Test results saved to test_results.json")
+
+fpr, tpr, _ = roc_curve(y_test_copy, y_test_pred_proba)
 roc_auc = auc(fpr, tpr)
-plt.figure(figsize=(8, 6))
-plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (AUC = {roc_auc:.4f})')
-plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--', label='Random Classifier')
-plt.xlim([0.0, 1.0])
-plt.ylim([0.0, 1.05])
-plt.xlabel('False Positive Rate')
-plt.ylabel('True Positive Rate')
-plt.title('Receiver Operating Characteristic (ROC) Curve (Email Events)')
-plt.legend(loc="lower right")
-plt.grid(alpha=0.3)
-plt.savefig('roc_curve_email.png', dpi=300, bbox_inches='tight')
-print("ROC curve saved as 'roc_curve_email.png'")
+plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC (AUC = {roc_auc:.4f})')
+plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+plt.xlabel('False Positive Rate'); plt.ylabel('True Positive Rate')
+plt.title('ROC Curve'); plt.legend(); plt.grid(alpha=0.3)
+plt.savefig('roc_curve_noleak.png', dpi=300, bbox_inches='tight')
 plt.show()
-print(f"\nROC AUC Score: {roc_auc:.4f}")
+print(f"ROC AUC Score: {roc_auc:.4f}")

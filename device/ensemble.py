@@ -24,6 +24,9 @@ df['user'] = parsed.apply(lambda x: x['user'])
 df['pc'] = parsed.apply(lambda x: x['pc'])
 df['Timestamp'] = pd.to_datetime(df['Timestamp'], format='%m-%d-%Y %H:%M', errors='coerce').fillna(pd.to_datetime(df['Timestamp'], format='%m/%d/%Y %H:%M:%S', errors='coerce'))
 
+#Count of timestamp not properly parsed
+print("Invalid Timestamps:", df['Timestamp'].isna().sum())
+
 df = df.dropna(subset=['Timestamp', 'activity', 'user', 'pc']).sort_values(['Timestamp']).reset_index(drop=True)
 df['label'] = df['anomaly_status'].apply(lambda x: 0 if x == 0 else 1)
 df['activity_encoded'] = df['activity'].map({'Connect': 1, 'Disconnect': 0})
@@ -80,6 +83,7 @@ df_train['user_degree'] = 0.0
 df_train['pc_degree'] = 0.0
 
 feature_cols = [
+    'user_encoded', 'pc_encoded', 'role_encoded', 'activity_encoded', 
     'hour_sin', 'hour_cos', 'dayofweek',
     'user_degree', 'pc_degree',
     'activity_encoded', 'role_encoded',
@@ -94,7 +98,7 @@ feature_cols = [
 # Initialize all feature columns for df_val
 df_val['user_degree'] = 0.0
 df_val['pc_degree'] = 0.0
-df_val['time_since_last'] = 0.0
+#df_val['time_since_last'] = 0.0
 # df_val['rolling_10_count'] = 0
 # df_val['rolling_100_count'] = 0
 df_val['rolling_3_anomaly'] = 0.0
@@ -105,7 +109,7 @@ df_val['anomaly_momentum'] = 0.0
 df_val['rare_pc_flag'] = 0
 df_val['rare_hour_for_user'] = 0
 df_val['user_gap_mean'] = 0.0
-df_val['user_gap_std'] = 1.0
+df_val['user_gap_std'] = 0.0
 df_val['gap_zscore'] = 0.0
 df_val['connects_per_hour'] = 0
 # G_val = nx.Graph()
@@ -140,7 +144,7 @@ for i in range(len(df_val)):
 
     #update pc into pc frequency
     pc_freq[pc] = pc_freq.get(pc, 0) + 1
-    df_val.at[idx, 'pc_freq'] = pc_freq.get(pc, 0)
+    #df_val.at[idx, 'pc_freq'] = pc_freq.get(pc, 0)
 
     df_val.at[idx, 'rare_pc_flag'] = int(pc_freq.get(pc, 0) < 10)
     df_val.at[idx, 'rare_hour_for_user'] = int(user_full['hour'].value_counts().get(user_full.loc[idx, 'hour'], 0) < 3)
@@ -177,7 +181,7 @@ best_thr = thresholds[np.argmax(f1_scores)] if len(thresholds) else 0.5
 # Initialize all feature columns for df_test
 df_test['user_degree'] = 0.0
 df_test['pc_degree'] = 0.0
-df_test['time_since_last'] = 0.0
+#df_test['time_since_last'] = 0.0
 # df_test['rolling_10_count'] = 0
 # df_test['rolling_100_count'] = 0
 df_test['rolling_3_anomaly'] = 0.0
@@ -281,7 +285,8 @@ for i in range(len(df_test)):
     prediction = ensemble.predict_proba(df_test.loc[[idx], feature_cols].replace([np.inf, -np.inf], 0).fillna(0))[:, 1]
     y_test_pred_proba.append(prediction[0])
     decision = prediction[0] >= best_thr
-    df_test.at[idx, 'label'] = 1 if decision else 0
+    if decision:
+     df_test.at[idx, 'label'] = 1
     # Update bool_map for the current user and pc if predicted as anomaly
     if decision == True:
         bool_map[df_test.at[idx, 'user_encoded'], df_test.at[idx, 'pc_encoded']] = True
@@ -301,7 +306,28 @@ rf_df = pd.Series(rf_importance, index=feature_cols)
 avg_importance = (cb_df + rf_df) / 2
 print("Top Ensemble Features:\n", avg_importance.sort_values(ascending=False).head(20))
 
-fpr, tpr, _ = roc_curve(y_test, y_test_pred_proba)
+#save test set results in json 
+import json
+from datetime import datetime
+
+test_results = {
+    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    "metrics": {
+        "accuracy": float(accuracy_score(y_test_copy, y_test_pred)),
+        "precision": float(precision_score(y_test_copy, y_test_pred, zero_division=0)),
+        "recall": float(recall_score(y_test_copy, y_test_pred, zero_division=0)),
+        "f1_score": float(f1_score(y_test_copy, y_test_pred, zero_division=0))
+    },
+    "threshold": float(best_thr),
+    "top_features": avg_importance.sort_values(ascending=False).head(20).to_dict()
+}
+
+with open('test_results.json', 'w') as f:
+    json.dump(test_results, f, indent=4)
+
+print("Test results saved to test_results.json")
+
+fpr, tpr, _ = roc_curve(y_test_copy, y_test_pred_proba)
 roc_auc = auc(fpr, tpr)
 plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC (AUC = {roc_auc:.4f})')
 plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
